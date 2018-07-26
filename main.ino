@@ -18,7 +18,6 @@
 #define OLED_SCL 15
 
 #define BUTTON_PIN 34
-#define EEPROM_SIZE 4
 
 unsigned int counter = 0;
 char TTN_response[20];
@@ -56,7 +55,7 @@ static osjob_t sendjob;
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
-const unsigned TX_INTERVAL = 60;
+unsigned TX_INTERVAL = 15;
 
 // Pin mapping
 const lmic_pinmap lmic_pins = {
@@ -84,11 +83,6 @@ void do_send(osjob_t* j) {
   Serial.println(buttonClickCount);
   int_union.int_data = buttonClickCount;
 
-  for (int i = 0; i < EEPROM_SIZE; i++) {
-    EEPROM.write(i, int_union.array_data[i]);
-  }
-  EEPROM.commit();
-
   static uint8_t message[4];
   for (int i = 0; i < 4; i++) {
     message[i] = int_union.array_data[i];
@@ -99,7 +93,7 @@ void do_send(osjob_t* j) {
     Serial.println(F("OP_TXRXPEND, not sending"));
   } else {
     // Prepare upstream data transmission at the next possible time.
-    LMIC_setTxData2(1, message, sizeof(message) - 1, 0);
+    LMIC_setTxData2(1, message, sizeof(message), 0);
     Serial.println(F("Sending uplink packet..."));
     digitalWrite(LEDPIN, HIGH);
     display.clear();
@@ -125,13 +119,31 @@ void onEvent (ev_t ev) {
       }
 
       if (LMIC.dataLen) {
-        int i = 0;
+        Serial.println(TX_INTERVAL);
         // data received in rx slot after tx
         Serial.print(F("Data Received: "));
         Serial.write(LMIC.frame + LMIC.dataBeg, LMIC.dataLen);
         Serial.println();
         Serial.println(LMIC.rssi);
 
+        switch (LMIC.frame[LMIC.dataBeg]) {
+          case 0x00:
+            for (int i = 0; i < LMIC.dataLen; i++) {
+              int_union.array_data[i] = LMIC.frame[i + LMIC.dataBeg + 1];
+            }
+            buttonClickCount = int_union.int_data;
+            break;
+          case 0x01:
+            unsigned newTime = 0;
+            newTime += LMIC.frame[LMIC.dataBeg + 1]; // Seconds
+            newTime += LMIC.frame[LMIC.dataBeg + 2] * 60; // Minutes
+            newTime += LMIC.frame[LMIC.dataBeg + 3] * 60 * 60; // Hours
+            Serial.println(newTime);
+            TX_INTERVAL = newTime;
+            break;
+        }
+
+        int i = 0;
         display.drawString (0, 9, "Received DATA.");
         for ( i = 0 ; i < LMIC.dataLen ; i++ )
           TTN_response[i] = LMIC.frame[LMIC.dataBeg + i];
@@ -188,16 +200,6 @@ void setup() {
 
   // Use the Blue pin to signal transmission.
   pinMode(LEDPIN, OUTPUT);
-
-  // Setup eeprom
-  if (!EEPROM.begin(EEPROM_SIZE)) {
-    Serial.println("EEPROM failed to begin");
-    for(;;){}
-  }
-  for (int i = 0; i < EEPROM_SIZE; i++) {
-    int_union.array_data[i] = EEPROM.read(i);
-  }
-  buttonClickCount = int_union.int_data;
 
   // Setup button and interrupts
   pinMode(BUTTON_PIN, INPUT);
